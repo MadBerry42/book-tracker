@@ -3,8 +3,6 @@ import sqlite3
 import requests
 import re
 
-st.title("Reading progress")
-
 # Create a database of books the user is currently reading
 def reading_db():
     conn = sqlite3.connect("reading.db")
@@ -17,7 +15,8 @@ def reading_db():
         author TEXT,
         page_count INT,
         pages_read INT,
-        year INT)  
+        year INT,
+        image_url TEXT)  
     ''')
     conn.commit()
     conn.close()
@@ -25,13 +24,11 @@ def reading_db():
 reading_db()
 
 # Add books to the "reading_list" table we created above
-def insert_title(title, author, year, page_count):
+def insert_title(title, author, year, page_count, image_url):
     conn = sqlite3.connect("reading.db")
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM reading_list")
-    count = cursor.fetchone()[0]
-    
-    cursor.execute("INSERT OR IGNORE INTO reading_list (title, author, year, page_count, pages_read) VALUES (?, ?, ?, ?, 0)", (title, author, year, page_count))
+    cursor.execute("INSERT OR IGNORE INTO reading_list (title, author, year, page_count, pages_read, image_url) VALUES (?, ?, ?, ?, 0, ?)", (title, author, year, page_count, image_url,))
     conn.commit()
     conn.close()
 
@@ -67,35 +64,21 @@ def search_book_online(query_og):
         year = pub_date[:4] if len(pub_date) >= 4 else "0000"
         page_count = volume_info.get("pageCount", 0)
 
-        book_string = f"{title} | {authors} | {year} | {page_count} pages"
+        image_links = volume_info.get("imageLinks", {})
+        image_url = image_links.get("thumbnail", "https://via.placeholder.com/128x192.png?text=No+Cover")
+
+        book_string = f"{title} | {authors} | {year} | {page_count} pages || {image_url}"
         
         formatted_books.append(book_string)
     
     return formatted_books
-
-query = st.text_input("What book are you looking for?")
-if query.strip():
-    books = search_book_online(query)
-
-    if books:
-        selected_book = st.selectbox("Select your book", books)
-        if st.button("Save"):
-            parts = selected_book.split('|')
-            title = parts[0]
-            author = parts[1]
-            year = parts[2]
-            page_count = parts[3]
-            insert_title(title, author, year, page_count)
-            st.success(f"'{title} by {author}' added to the reading list!")
-    else:
-        st.info("No book matching this search")
 
 
 # Show a list of all books being read right now
 def get_all_titles():
     conn = sqlite3.connect("reading.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT id, title, author, year, page_count, pages_read FROM reading_list")
+    cursor.execute("SELECT id, title, author, year, page_count, pages_read, image_url FROM reading_list")
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -110,17 +93,6 @@ def delete_entry(id):
     conn.commit()
     conn.close()
     st.rerun()
-
-st.title("Delete a Name")
-id_list = [row[0] for row in title_list]
-book_dict = {row[0]: f"{row[0]}. {row[1]}" for row in title_list}
-
-selected_id = st.selectbox("Select ID to delete: ", 
-                           options=list(book_dict.keys()),
-                           format_func=lambda x: book_dict[x])
-if st.button("Delete"):
-    delete_entry(selected_id)
-    st.success("Deleted succesfully")
 
 # Update entries
 def update_name(id, new_name):
@@ -145,23 +117,98 @@ def search_names(keyword):
     conn.close()
     return results
 
-st.title("Search in your list:")
-query = st.text_input("Search:")
-if query:
-    results = search_names(query)
-    for r in results: 
-        st.write(f"{r[0]}. {r[1]}")
-
-# View reading list
-st.title("View list")
-title_list = get_all_titles()
-if title_list:
-    for indice, row in enumerate(title_list, start=1): 
-        st.write(f"**{indice}.** {row[1]}")
-
+def update_progress(book_id, pages_read):
+    conn = sqlite3.connect("reading.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE reading_list SET pages_read = ? WHERE id = ?", (pages_read, book_id))
+    conn.commit()
+    conn.close()
+    st.rerun()
 
 # TODO: make a function for dropbox (titles = get_all_titles, id_list, selected_id = st.selectbox() etc.) menu and conn, cursor = conn.cursor etc. 
-# Add a progress bar: when button "Pages" is pressed, insert number of pages from the user (or percentage, choose from a dropbox menu),
-# Compute progress from n.pages data from the API and show it)
 
 
+
+# ------------------------------------------ UI: TABS -----------------------------------------------
+tab_reading_now, tab_add, tab_manage = st.tabs(["Currently reading", "New book", "Manage bookshelf"])
+
+with tab_reading_now:
+    books = get_all_titles()
+    if books:
+        for row in books:
+            book_id = row[0]
+            title = row[1]
+            author = row[2]
+            total_pages = row[4] if row[4] > 0 else 100
+            pages_already_read = row[5]
+            cover_url = row[6]
+
+            if not cover_url or not str(cover_url).startswith("http"):
+                cover_url = "https://via.placeholder.com/128x192.png?text=No+Cover"
+
+            col_img, col_txt = st.columns([1, 5])
+            with col_img:
+                st.image(cover_url, width=70)
+            with col_txt:
+                st.markdown(f"{title} by {author}")
+                current_pages = st.number_input(
+                    f"Insert page: ", 
+                    min_value=0, 
+                    max_value=total_pages, 
+                    value=pages_already_read,
+                    key=f"input_{book_id}" 
+                )
+
+                progress_percent = int((current_pages/total_pages) * 100)
+                st.progress(progress_percent / 100)
+                st.caption(f"{progress_percent}%")
+
+                if st.button("Save", key=f"btn_save_{book_id}", type="primary"):
+                    update_progress(book_id, current_pages)
+                    st.success("Progress updated!")
+            st.divider()
+
+    # View reading list
+    st.title("My shelf")
+
+with tab_add:
+    query = st.text_input("What are you looking for?")
+    if query.strip():
+        books = search_book_online(query)
+
+        if books:
+            selected_book = st.selectbox("Select your book", books)
+            if st.button("Save"):
+                parts = selected_book.split('|')
+                title = parts[0].strip()
+                author = parts[1].strip()
+                year = parts[2].strip()
+                page_count = int(parts[3].replace("pages", " ").strip())
+                image_url = parts[4].strip()
+                insert_title(title, author, year, page_count, image_url)
+                st.success(f"'{title} by {author}' added to the reading list!")
+        else:
+            st.info("No book matching this search")
+
+with tab_manage:
+    st.title("Delete a Name")
+    id_list = [row[0] for row in title_list]
+    book_dict = {row[0]: f"{row[0]}. {row[1]}" for row in title_list}
+
+    selected_id = st.selectbox("Select ID to delete: ", 
+                            options=list(book_dict.keys()),
+                            format_func=lambda x: book_dict[x])
+    if st.button("Delete"):
+        delete_entry(selected_id)
+        st.success("Deleted succesfully")
+
+    st.title("Search in your list:")
+    query = st.text_input("Search:")
+    if query:
+        results = search_names(query)
+        for r in results: 
+            st.write(f"{r[0]}. {r[1]}")
+
+
+
+        
