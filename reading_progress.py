@@ -31,8 +31,10 @@ def insert_title(title, author, year, page_count, image_url):
     cursor.execute("INSERT OR IGNORE INTO reading_list (title, author, year, page_count, pages_read, image_url) VALUES (?, ?, ?, ?, 0, ?)", (title, author, year, page_count, image_url,))
     conn.commit()
     conn.close()
+    st.rerun()
 
 # Search books online via API
+@st.cache_data
 def search_book_online(query_og):
     query = query_og.strip()
     if not query:
@@ -58,18 +60,18 @@ def search_book_online(query_og):
 
     for book in books_dict:
         volume_info = book.get("volumeInfo", {})
-        title = volume_info.get('title', 'Unknown title')
-        authors = ",".join(volume_info.get('authors', ['Unknown author']))
-        pub_date = volume_info.get("publishedDate", "0000")
-        year = pub_date[:4] if len(pub_date) >= 4 else "0000"
-        page_count = volume_info.get("pageCount", 0)
 
         image_links = volume_info.get("imageLinks", {})
         image_url = image_links.get("thumbnail", "https://via.placeholder.com/128x192.png?text=No+Cover")
 
-        book_string = f"{title} | {authors} | {year} | {page_count} pages || {image_url}"
-        
-        formatted_books.append(book_string)
+        book_data = {
+                "title": volume_info.get('title', 'Unknown title'),
+                "author": ",".join(volume_info.get('authors', ['Unknown author'])),
+                "year": volume_info.get("publishedDate", "0000")[:4],
+                "page_count": volume_info.get("pageCount", 0),
+                "image_url": image_url
+            }
+        formatted_books.append(book_data)
     
     return formatted_books
 
@@ -127,8 +129,6 @@ def update_progress(book_id, pages_read):
 
 # TODO: make a function for dropbox (titles = get_all_titles, id_list, selected_id = st.selectbox() etc.) menu and conn, cursor = conn.cursor etc. 
 
-
-
 # ------------------------------------------ UI: TABS -----------------------------------------------
 tab_reading_now, tab_add, tab_manage = st.tabs(["Currently reading", "New book", "Manage bookshelf"])
 
@@ -168,9 +168,6 @@ with tab_reading_now:
                     st.success("Progress updated!")
             st.divider()
 
-    # View reading list
-    st.title("My shelf")
-
 with tab_add:
     query = st.text_input("What are you looking for?")
     if query.strip():
@@ -179,21 +176,22 @@ with tab_add:
         if books:
             selected_book = st.selectbox("Select your book", books)
             if st.button("Save"):
-                parts = selected_book.split('|')
-                title = parts[0].strip()
-                author = parts[1].strip()
-                year = parts[2].strip()
-                page_count = int(parts[3].replace("pages", " ").strip())
-                image_url = parts[4].strip()
+                title = selected_book["title"]
+                author = selected_book["author"] 
+                year = selected_book["year"]
+                page_count = selected_book["page_count"] 
+                image_url = selected_book["image_url"] 
                 insert_title(title, author, year, page_count, image_url)
-                st.success(f"'{title} by {author}' added to the reading list!")
+            
+                st.success(f"Added '{title} by {author} to the reading list!")
         else:
             st.info("No book matching this search")
 
 with tab_manage:
+    title_list = get_all_titles()
     st.title("Delete a Name")
     id_list = [row[0] for row in title_list]
-    book_dict = {row[0]: f"{row[0]}. {row[1]}" for row in title_list}
+    book_dict = {row[0]: f"{row[1]}" for row in title_list}
 
     selected_id = st.selectbox("Select ID to delete: ", 
                             options=list(book_dict.keys()),
@@ -207,8 +205,8 @@ with tab_manage:
     if query:
         results = search_names(query)
         for r in results: 
-            st.write(f"{r[0]}. {r[1]}")
-
+            st.write(f"{r[1]}")
+    
 
 
         
